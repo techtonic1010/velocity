@@ -1,0 +1,34 @@
+fastapi==0.115.0
+
+# uvicorn[standard]
+
+# because it installs optional performance libraries like
+
+# uvloop
+# httptools
+# websockets
+# watchfiles
+
+uvicorn[standard]==0.30.6
+sentence-transformers==3.0.1
+pydantic==2.9.2
+numpy==1.26.4
+pytest==8.3.3
+httpx==0.27.2
+
+# What this file is and why it's needed now: embedding-creator/requirements.txt. Nothing in this folder can execute yet — main.py imports fastapi, pydantic, sentence_transformers, none of which are installed anywhere. This file is what pip install -r requirements.txt reads locally, and it's also what the (not-yet-written) Dockerfile's dependency-layer will install.
+# Python does not automatically install libraries that your code imports.
+
+# For example, if main.py contains
+
+# from fastapi import FastAPI
+# from pydantic import BaseModel
+# from sentence_transformers import SentenceTransformer
+# python main.py
+# Python immediately throws
+
+# ModuleNotFoundError: No module named 'fastapi'
+
+# Anyone can now install everything with one command:
+
+# pip install -r requirements.txt

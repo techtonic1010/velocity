@@ -1,0 +1,20 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: entity-upload-service
+  datasource:
+    url: ${SPRING_DATASOURCE_URL}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
+
+embedding-creator:
+  base-url: ${EMBEDDING_CREATOR_URL}
+
+mind:
+  news-tsv-path: ${MIND_NEWS_TSV_PATH:/data/mind-small/train/news.tsv}
+
+ingestion:
+  batch-size: 100
+  embed-concurrency: 6

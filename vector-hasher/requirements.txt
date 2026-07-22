@@ -1,0 +1,6 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+numpy==1.26.4
+psycopg[binary]==3.2.3
+kafka-python==2.0.2
+pytest==8.3.3

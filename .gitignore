@@ -1,0 +1,23 @@
+# MIND dataset — large data files, placed manually, never committed
+data/
+
+# Java / Maven
+entity-upload-service/target/
+entity-interaction-service/target/
+recommendation-service/target/
+*.class
+
+# Python
+**/__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Env files
+.env
+
+# IDE
+.idea/
+.vscode/
+*.iml
