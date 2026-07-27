@@ -34,12 +34,22 @@ def adjacent_shard_ids(shard_id: int, num_shards: int) -> list[int]:
 
 # It only picks which shard numbers to look in — 
 # e.g. it returns something like [3] or [2, 3, 4]. It does not fetch any actual articles.
+# // this shardIDs ===> is passed to vector-hasher/db.py/fetch_candidates_with_vectors
 def resolve_candidate_shard_ids(
     shard_id: int, same_bucket_count: int, num_shards: int, min_candidates: int
 ) -> list[int]:
     if same_bucket_count >= min_candidates:
         return [shard_id]
     return adjacent_shard_ids(shard_id, num_shards)
+
+def fetch_shard_id(dsn: str, entity_id: str) -> int | None:
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT shard_id FROM entities WHERE entity_id = %s", (entity_id,)
+            )
+            row = cur.fetchone()
+    return row[0] if row else None
 
 # /////////////////////what did we save in the milestone 2 . because the same vectors , lie in the same shard . ?? isnt it ?? ans short
 # that's the goal of LSH: similar vectors usually land in the same shard. 
@@ -52,6 +62,13 @@ def cosine_distance(vec1: np.ndarray, vec2: np.ndarray) -> float:
     norm_vec1 = np.linalg.norm(vec1)
     norm_vec2 = np.linalg.norm(vec2)
     return 1 - (dot_product / (norm_vec1 * norm_vec2))
+# This is the number the heap sorts and evicts by. 
+# Cosine distance isn't a separate concept sitting next to the heap — it's 
+# literally the "distance" the heap logic is built around:
+
+
+
+
 
 
 #             384 values

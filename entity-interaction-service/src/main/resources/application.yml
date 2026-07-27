@@ -1,0 +1,36 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: entity-interaction-service
+  datasource:
+    url: ${SPRING_DATASOURCE_URL}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS}
+  data:
+    redis:
+      host: ${REDIS_HOST}
+      port: ${REDIS_PORT}
+
+interaction:
+  kafka-topic: ${KAFKA_INTERACTION_TOPIC}
+
+mind:
+  behaviors-train-tsv-path: ${MIND_BEHAVIORS_TRAIN_TSV_PATH}
+  behaviors-dev-tsv-path: ${MIND_BEHAVIORS_DEV_TSV_PATH}
+
+redis:
+  last-n-size: ${LAST_N_SIZE}
+  shard-count: ${REDIS_SHARD_COUNT}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: always

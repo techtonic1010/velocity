@@ -431,3 +431,120 @@ Example entry:
   same reason M2's mod-8 entry was: an honest record of what verification
   actually surfaced, not just what was planned in the abstract.
 ```
+
+### Milestone 4 entries (2026-07-25)
+
+```
+- Decision: entity_history's PRIMARY KEY (source_id, entity_id) does NOT
+  collapse genuine repeated History entries (sourceId is "HIST-{userId}-{index}",
+  one distinct row per position in the user's History list), while Redis's
+  last-N ring buffer (LREM+LPUSH+LTRIM) and Bloom filter DO collapse repeats
+  of the same entity for the same user — on purpose, not an oversight.
+- At real scale: this asymmetry would still hold — it isn't a scale tradeoff,
+  it's a correctness distinction between two different questions.
+- Why: Postgres's entity_history is the permanent record of what actually
+  happened — every real occurrence (real cross-session duplicate or genuine
+  repeated History entry) needs to remain a distinct row. Redis's last-N and
+  Bloom filter answer "what's currently recent" and "has this ever been
+  seen," respectively — neither of those questions benefits from tracking
+  exact repeat counts, so collapsing repeats there is correct, not lossy.
+  Noted explicitly here so a future pass doesn't "fix" the two stores to
+  match each other without realizing they're intentionally answering
+  different questions.
+
+- Decision: entity-interaction-service's JUnit suite (45 tests across
+  util/parser/service/repository/controller) is unit-level only — Redis
+  (StringRedisTemplate), the JdbcTemplate, and KafkaTemplate are all mocked
+  with Mockito; there is no @SpringBootTest, no embedded Kafka, and no
+  Testcontainers-backed Postgres/Redis. ReplayService is exercised against
+  real temp-file TSVs (it takes plain path strings, so no Spring context is
+  needed there either). pom.xml has no spring-kafka-test / testcontainers
+  dependency added.
+- At real scale: you'd add embedded-Kafka + Testcontainers Postgres/Redis
+  integration tests that exercise the actual @KafkaListener wiring, the real
+  Lua ring-buffer script, and the real ON CONFLICT upsert — none of which a
+  mocked unit test can catch (e.g. a typo in the Lua script or a JDBC type
+  mismatch would still pass every test in this suite).
+- Why not here: every environment-required property (datasource URL, Kafka
+  bootstrap servers, Redis host, MIND file paths) is a raw `${ENV_VAR}` with
+  no default in application.yml, and there's no test profile — a
+  @SpringBootTest would need all of that wired to even start the context.
+  Given this milestone's actual logic (TSV parsing, timeline ordering,
+  bit-position math, batch upsert parameter binding, per-event vs.
+  per-batch call sequencing) is fully expressible as pure functions plus
+  thin adapters around three well-defined client APIs, mocking those
+  clients tests the real risk (this service's own logic) without paying for
+  a docker-compose-dependent test environment. Kafka/Redis/Postgres wiring
+  itself is exercised manually via `docker-compose up` + the milestone's
+  stated verify criterion, per CLAUDE.md's build/test commands.
+
+- Decision (found during live verification, not a code change): the local
+  `redis` container had a corrupted network attachment (HostConfig said
+  `velocity_default`, but `NetworkSettings.Networks` was empty — likely
+  stale from being stopped/started many times over the project's life
+  without ever being recreated), which made `redis` unresolvable from
+  entity-interaction-service. Fixed with
+  `docker compose up -d --force-recreate redis`. Not an application bug —
+  noted here only because it fully masked the real verification for one
+  replay attempt (see next entry) and would silently do so again for
+  anyone reusing these long-lived local containers.
+- At real scale: a real orchestrator (k8s, ECS) wouldn't let a container's
+  network attachment silently drift from its declared config like this.
+- Why not here: this is host-local Docker Compose state, not something the
+  service or its tests control.
+
+- Decision (found live, FIXED same session): while `redis` was unreachable
+  above, `InteractionEventConsumer`'s batch listener didn't retry
+  indefinitely — Spring Kafka's default batch error handling
+  (`FailedBatchProcessor` -> `FallbackBatchErrorHandler`) retried a few
+  times, then logged "Records discarded: interaction-events-4@0..18" and
+  moved on. The offsets were committed past those records; the 19 events
+  were gone from processing (not just delayed) until userId=U80234 was
+  replayed a second time by hand. No dead-letter topic, no alerting, no
+  infinite-retry/backoff config existed anywhere in KafkaConsumerConfig.
+  Fix: `KafkaConsumerConfig` now builds a `DefaultErrorHandler` from an
+  `ExponentialBackOff` (1s initial, x2 multiplier, capped at 30s between
+  attempts, `maxElapsedTime`/`maxAttempts` left at their unlimited
+  defaults) and wires it onto `batchFactory` via `setCommonErrorHandler`.
+  Declined, not implemented: a dead-letter topic/recoverer (no
+  poison-message case exists for this listener — every operation is
+  idempotent, see the entry above — so a DLQ solves a problem this service
+  doesn't have) and wrapping the value deserializer in
+  `ErrorHandlingDeserializer` (a real but separate gap: a genuinely
+  malformed message would still crash the consumer thread before reaching
+  this error handler; different failure mode than the one observed, left
+  as future work).
+- Bug found while building the fix itself, also fixed: the first attempt
+  used `errorHandler.setRetryListeners(record, ex, attempt) -> log.warn(...))`
+  as a lambda. `RetryListener` has two `failedDelivery` overloads — a
+  single-`ConsumerRecord` one (the only abstract method, so the only one a
+  lambda can implement) and a default no-op `ConsumerRecords` (plural) one.
+  Since `batchFactory` is a *batch* listener, `ErrorHandlingUtils.retryBatch`
+  always calls the plural overload, so the lambda silently never fired —
+  confirmed via `kill -3` thread dumps showing the consumer thread legitimately
+  parked in retry/backoff (not stuck), while zero log lines appeared. Fixed
+  by implementing `RetryListener` as an anonymous class overriding the
+  `ConsumerRecords` overload explicitly.
+- At real scale: you'd likely still keep the infinite-retry choice (matches
+  this project's own "Kafka decouples ingestion from durable writes"
+  reasoning in §3) but might add metrics/alerting on retry duration so an
+  operator knows when a dependency has been down "too long," rather than
+  relying on log lines alone.
+- Why an infinite retry (not a DLQ) is fine here: every operation this
+  listener performs is idempotent (see the entry above), so there is no
+  message that can never succeed — only dependencies that are temporarily
+  down. A local demo's failure modes don't include a genuinely poisoned
+  `InteractionEvent`.
+- Verified live, twice, against the corrected code (`docker network
+  disconnect/connect velocity_default redis` to simulate the outage without
+  touching host systemd services): a fresh user's batch sat retrying with
+  `WARN ... Retrying interaction-events batch of N (attempt K) after: ...`
+  logged on each attempt (no `Records discarded`), then — once Redis was
+  reconnected, with no manual re-replay — the same batches were consumed
+  successfully and `entity_history` + Redis ended up fully and correctly
+  populated (96/96 rows for the test user). The dominant delay between
+  attempts in this test was Lettuce's default ~60s command timeout (not the
+  configured 1s/2s backoff), since the simulated outage was a live
+  connection going silent rather than an instant DNS failure — worth knowing
+  if this is ever demoed live, but doesn't change correctness.
+```

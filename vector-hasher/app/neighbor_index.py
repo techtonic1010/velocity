@@ -47,8 +47,8 @@ from app import db, heap, kafka_client, lsh
 #   │                          │         │   kafka_client.                │
 #   │                          │         │    send_neighbor_update        │
 #   │                          │         │    (..., candidate_id, ...)    │
-#   └─────────────────────────┘         └──────────────────────────────┘
-#
+#   └───────────────────────── ┘          └──────────────────────────────┘
+# 
 #   Note: distance is computed ONCE in Half 1 and reused in Half 2 for the
 #   same candidate — cosine distance is symmetric, so distance(A, B) ==
 #   distance(B, A). No need to call cosine_distance a second time.

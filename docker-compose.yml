@@ -69,12 +69,22 @@ services:
       - "8082:8080"
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_INTERACTION_TOPIC: interaction-events
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/recengine
       SPRING_DATASOURCE_USERNAME: recuser
       SPRING_DATASOURCE_PASSWORD: recpass
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      MIND_BEHAVIORS_TRAIN_TSV_PATH: /data/mind-small/train/behaviors.tsv
+      MIND_BEHAVIORS_DEV_TSV_PATH: /data/mind-small/dev/behaviors.tsv
+      LAST_N_SIZE: "5"
+      REDIS_SHARD_COUNT: "8"
+    volumes:
+      - ./data/mind-small:/data/mind-small:ro
     depends_on:
       - kafka
       - postgres
+      - redis
 
   recommendation-service:
     build: ./recommendation-service
@@ -117,6 +127,7 @@ services:
     depends_on:
       - postgres
       - kafka
+      - redis
 
 volumes:
   kafka-data:
