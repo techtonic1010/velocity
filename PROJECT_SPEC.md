@@ -548,3 +548,95 @@ Example entry:
   connection going silent rather than an instant DNS failure — worth knowing
   if this is ever demoed live, but doesn't change correctness.
 ```
+
+### Milestone 5 entries (2026-07-28)
+
+```
+- Decision: `recommendation-service` calls vector-hasher's existing
+  `GET /neighbors/{entityId}` over HTTP for candidate retrieval, rather than
+  querying `neighbor_index_read` directly via its own JDBC connection —
+  reuses vector-hasher's own read-side LRU cache and keeps that table
+  single-owner. `entities` (title/category) and `entity_history` (seen-check,
+  fallbacks) ARE queried directly via JDBC, since those are plain shared
+  reference/fact tables with no existing service API, matching the same
+  write-owner/read-elsewhere pattern `entities` already had (entity-upload
+  -service writes it, this service reads it). Full reasoning in
+  MILESTONE_5_PLAN.md.
+- Decision: ranking uses placeholder constants — LIKE distance x0.8,
+  DISLIKE x1.5, neutral/CLICK/no-signal x1.0, `score = 1/(1+adjustedDistance)`
+  — same spirit as Milestone 4's 10%/5% LIKE/DISLIKE simulation ratio:
+  deliberate, tunable demo values, not derived from any real ranking model.
+- Decision: the merge step keeps a candidate's *minimum raw distance* across
+  seeds and only that winning seed's signal is used for scaling — a
+  candidate referenced by both a closer neutral seed and a farther LIKE seed
+  gets no boost, since the closer/neutral seed wins provenance. A documented
+  simplification (see CandidateRankerTest's
+  `minDistanceWinsProvenanceEvenWhenAFartherSeedWasLiked`), not a bug.
+- Decision: `recommendation-service` has three independent Redis-state-loss
+  fallbacks, all one consistent shape (check existence -> fall back to a
+  batched `entity_history` query -> let Redis self-heal on the user's next
+  real interaction), found and added during design review before any code
+  was written: (1) last-N (`lastEntities` empty -> `findRecentEntityIds`),
+  (2) the Bloom filter (missing key -> batched `findSeenEntityIds` for
+  every candidate instead of trusting "0 bits = unseen"), (3) signals
+  (missing key -> batched `findLatestInteractionTypes` for just the seeds).
+  All three live-verified against real data (see below) by wiping each
+  Redis key in turn for a real user and confirming identical, correct
+  results came back from Postgres instead.
+- Decision: no dedicated executor for the parallel per-seed vector-hasher
+  calls — `CompletableFuture.supplyAsync` on the JVM's default common pool.
+  At most `LAST_N_SIZE` (5) concurrent HTTP calls per request; a dedicated
+  thread pool would be configuration for its own sake at this scale.
+- Decision (found while implementing, not in the original plan): the
+  Bloom-gated filter is a single filter pass over the already-sorted
+  candidate list (`ranked.stream().filter(...).limit(topK)`), not "split
+  into free/needs-confirming lists, then recombine" as originally sketched
+  — splitting and recombining loses the original score order and would
+  need a second sort; filtering the one sorted list in place doesn't.
+
+- Decision (found live, real cross-milestone gap, fixed same session):
+  Milestones 1-3 had only ever been exercised against ~20-21 entities
+  end-to-end. Milestone 4's replay uses real MIND behaviors.tsv data
+  referencing thousands of distinct entity IDs, essentially none of which
+  overlapped with the 21 already-embedded/indexed entities — so a real
+  replayed user's seeds had zero neighbor data to retrieve, a data-
+  availability gap rather than a Milestone 5 bug. Fixed by fully ingesting
+  both `train/news.tsv` (51,282 articles) and `dev/news.tsv` (42,416
+  articles) — 65,239 distinct entities after dedup — via
+  `entity-upload-service`, then running vector-hasher's `/assign-shards`
+  and `/neighbors/index-all` over all of them.
+- Bug found and fixed during that ingestion (in already-completed
+  Milestone 2/3 code, not Milestone 5): `vector-hasher`'s
+  `db.update_shard_ids` built one `UPDATE ... FROM (VALUES ...)` with 2 SQL
+  parameters per assignment in a single statement — fine at ~20 entities,
+  but Postgres has a hard 65,535-bound-parameter limit per query, and
+  65,239 entities x 2 params = 130,478 blew past it (`psycopg
+  .OperationalError: number of parameters must be between 0 and 65535`).
+  Fixed by batching the same UPDATE into chunks of 10,000 assignments
+  (20,000 params/batch) reusing one connection, rather than one giant
+  statement. Confirmed fixed: `/assign-shards` succeeded for all 65,239
+  afterward.
+- At real scale: neither of the two items above is a "real scale" tradeoff
+  in the usual sense — they're both correctness gaps that a portfolio
+  project's own necessarily-small verify-as-you-go milestones hadn't yet
+  exercised at production-like data volume. Both are now fixed permanently,
+  not worked around.
+- Verified live end-to-end against real data for user U80234 (real MIND
+  click history from Milestone 4's earlier verification): `GET
+  /recommendations?userId=U80234` returned 10 real, correctly-titled/
+  -categorized, score-sorted articles, none present in U80234's real
+  `entity_history`. Injected one additional real interaction (`POST
+  /interactions`, entityId N27132, a genuine neighbor of an existing seed)
+  and confirmed: (a) N27132 was correctly excluded from recommendations
+  once seen; (b) after `DEL user:U80234:bloomfilter`, N27132 stayed
+  correctly excluded via the batched Postgres fallback, not silently let
+  back through; (c) after `DEL user:U80234:lastEntities`, the identical
+  recommendation set came back sourced from `findRecentEntityIds`; (d)
+  after `DEL user:U80234:signals`, a real LIKE-boosted candidate (N11744,
+  score 0.580016698609928 both before and after) kept its exact boosted
+  score via `findLatestInteractionTypes`. Also observed, unprompted: the
+  injected click pushed N27132 into U80234's last-N ring buffer, and its
+  own (much closer, 0.39-0.51 distance) neighbors organically took over the
+  top of the next call's results — the whole pipeline responding correctly
+  to a real new interaction, not just a static fixture.
+```

@@ -1,0 +1,23 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: recommendation-service
+  datasource:
+    url: ${SPRING_DATASOURCE_URL}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
+  data:
+    redis:
+      host: ${REDIS_HOST}
+      port: ${REDIS_PORT}
+
+vector-hasher:
+  base-url: ${VECTOR_HASHER_URL}
+
+redis:
+  last-n-size: ${LAST_N_SIZE}
+
+recommendation:
+  top-k: 10

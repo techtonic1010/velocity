@@ -13,22 +13,38 @@ def fetch_all_vectors(dsn: str) -> list[tuple[str, np.ndarray]]:
             rows = cur.fetchall()
     return [ (entity_id, np.frombuffer(raw, dtype="<f4")) for entity_id, raw in rows]
 
-# assingning shardIDs to each vectoe in the database , and add it in database . 
+# Each entity contributes 2 SQL parameters (e.g., entity_id and shard_id).
+
+# So:
+
+# 65,239 entities × 2 parameters
+# = 130,478 parameters
+
+# PostgreSQL has a hard limit of 65,535 bind parameters per statement, so the query fails once you exceed that limit.
+# assingning shardIDs to each vectoe in the database , and add it in database .
+# Batched: 2 params per assignment, and Postgres has a hard 65,535-param-per-query limit — a
+# single UPDATE for the whole dataset works fine at Milestone 2/3's ~20-entity test scale but
+# breaks past ~32,767 assignments. 10,000 per batch (20,000 params) stays well under that limit.
+_SHARD_UPDATE_BATCH_SIZE = 10_000
+
+
 def update_shard_ids(dsn: str, assignments: list[tuple[str, int]]) -> None:
     if not assignments:
         return
 
-    values_clause = ", ".join(["(%s::varchar, %s::integer)"] * len(assignments))
-    params = [value for pair in assignments for value in pair]
-    query = f"""
-        UPDATE entities AS e
-        SET shard_id = data.shard_id
-        FROM (VALUES {values_clause}) AS data(entity_id, shard_id)
-        WHERE e.entity_id = data.entity_id
-    """
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
-            cur.execute(query, params)
+            for start in range(0, len(assignments), _SHARD_UPDATE_BATCH_SIZE):
+                batch = assignments[start:start + _SHARD_UPDATE_BATCH_SIZE]
+                values_clause = ", ".join(["(%s::varchar, %s::integer)"] * len(batch))
+                params = [value for pair in batch for value in pair]
+                query = f"""
+                    UPDATE entities AS e
+                    SET shard_id = data.shard_id
+                    FROM (VALUES {values_clause}) AS data(entity_id, shard_id)
+                    WHERE e.entity_id = data.entity_id
+                """
+                cur.execute(query, params)
 
 # // Fetch the shard ID for a given entity.
 def fetch_shard_id(dsn: str, entity_id: str) -> int | None:
@@ -128,6 +144,7 @@ def save_neighbors(
                 """,
                 (entity_id, shard_id, Jsonb(neighbors_json)),
             )
+
 
 
 # Called by the Kafka consumer only. Unlike save_neighbors, the neighbors

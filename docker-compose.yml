@@ -92,16 +92,17 @@ services:
     ports:
       - "8083:8080"
     environment:
-      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/recengine
       SPRING_DATASOURCE_USERNAME: recuser
       SPRING_DATASOURCE_PASSWORD: recpass
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      VECTOR_HASHER_URL: http://vector-hasher:8000
+      LAST_N_SIZE: "5"
     depends_on:
       - redis
       - postgres
-      - kafka
+      - vector-hasher
 
   embedding-creator:
     build: ./embedding-creator
